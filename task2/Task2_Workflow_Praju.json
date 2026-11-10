@@ -1,0 +1,309 @@
+{
+  "name": "Task2 Morning Brief - Crypto Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-1",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "morning-brief",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-1",
+      "name": "Webhook (manual test)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 520],
+      "webhookId": "morning-brief-praju"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.coingecko.com/api/v3/coins/markets",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "vs_currency", "value": "usd" },
+            { "name": "order", "value": "market_cap_desc" },
+            { "name": "per_page", "value": "20" },
+            { "name": "page", "value": "1" },
+            { "name": "sparkline", "value": "false" },
+            { "name": "price_change_percentage", "value": "24h" }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "http-markets-1",
+      "name": "CoinGecko Markets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 400],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = Array.isArray(items[0].json) ? items[0].json : items.map(i => i.json);\nconst top5 = rows\n  .slice()\n  .sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0))\n  .slice(0, 5)\n  .map((c, idx) => ({\n    rank: idx + 1,\n    id: c.id,\n    symbol: (c.symbol || '').toUpperCase(),\n    name: c.name,\n    price: c.current_price,\n    marketCap: c.market_cap,\n    change24h: c.price_change_percentage_24h,\n  }));\n\nreturn [{ json: { top5, leader: top5[0] || null, generatedAt: new Date().toISOString() } }];"
+      },
+      "id": "code-top5-1",
+      "name": "Transform Top 5",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.coingecko.com/api/v3/coins/{{$json.leader.id}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "localization", "value": "false" },
+            { "name": "tickers", "value": "false" },
+            { "name": "market_data", "value": "true" },
+            { "name": "community_data", "value": "false" },
+            { "name": "developer_data", "value": "false" }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "http-enrich-1",
+      "name": "Enrich Leader Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 400],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const digest = $('Transform Top 5').first().json;\nconst detail = items[0].json;\nconst ath = detail?.market_data?.ath?.usd ?? null;\nconst athChange = detail?.market_data?.ath_change_percentage?.usd ?? null;\nconst homepage = detail?.links?.homepage?.[0] || '';\nconst description = (detail?.description?.en || '').replace(/<[^>]+>/g, '').slice(0, 280);\n\nreturn [{\n  json: {\n    ...digest,\n    enrichment: {\n      id: detail.id,\n      ath,\n      athChange,\n      homepage,\n      description\n    }\n  }\n}];"
+      },
+      "id": "code-merge-1",
+      "name": "Merge Enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "threshold-1",
+              "leftValue": "={{ $json.leader.change24h }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-threshold-1",
+      "name": "IF Leader 24h Change > 2%",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1240, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = items[0].json;\nconst lines = d.top5.map(c => `${c.rank}. ${c.symbol} $${c.price} (${Number(c.change24h).toFixed(2)}%)`);\nconst msg = [\n  'MORNING BRIEF — Bullish leader (>2% 24h)',\n  `Leader: ${d.leader.name} (${d.leader.symbol})`,\n  `Price: $${d.leader.price} | 24h: ${Number(d.leader.change24h).toFixed(2)}%`,\n  `ATH: $${d.enrichment.ath} (${Number(d.enrichment.athChange).toFixed(2)}% from ATH)`,\n  '',\n  'Top 5 by market cap:',\n  ...lines,\n  '',\n  d.enrichment.homepage ? `Link: ${d.enrichment.homepage}` : '',\n  `Generated: ${d.generatedAt}`\n].filter(Boolean).join('\\n');\nreturn [{ json: { content: msg, route: 'bullish', ...d } }];"
+      },
+      "id": "code-bullish-1",
+      "name": "Format Bullish Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = items[0].json;\nconst lines = d.top5.map(c => `${c.rank}. ${c.symbol} $${c.price} (${Number(c.change24h).toFixed(2)}%)`);\nconst msg = [\n  'MORNING BRIEF — Flat/Soft leader (<=2% 24h)',\n  `Leader: ${d.leader.name} (${d.leader.symbol})`,\n  `Price: $${d.leader.price} | 24h: ${Number(d.leader.change24h).toFixed(2)}%`,\n  `Note: ${d.enrichment.description || 'No description'}`,\n  '',\n  'Top 5 by market cap:',\n  ...lines,\n  '',\n  `Generated: ${d.generatedAt}`\n].filter(Boolean).join('\\n');\nreturn [{ json: { content: msg, route: 'soft', ...d } }];"
+      },
+      "id": "code-soft-1",
+      "name": "Format Soft Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1480, 520]
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $json.content }}",
+        "options": {}
+      },
+      "id": "discord-success",
+      "name": "Post Digest to Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1720, 400],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "REPLACE_WITH_DISCORD_CREDENTIAL_ID",
+          "name": "Discord Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const err = items[0].json;\nconst message = err.error?.message || err.message || JSON.stringify(err);\nconst content = `Morning Brief FAILED: ${String(message).slice(0, 1500)}`;\nreturn [{ json: { content, failed: true } }];"
+      },
+      "id": "format-error",
+      "name": "Format API Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 640]
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $json.content }}",
+        "options": {}
+      },
+      "id": "discord-error",
+      "name": "Post API Failure Alert",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [760, 640],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "REPLACE_WITH_DISCORD_CREDENTIAL_ID",
+          "name": "Discord Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Setup\n1. Create a Discord Incoming Webhook\n2. Add it in n8n Credentials → Discord Webhook (never hard-code)\n3. Select that credential on both Discord nodes\n4. Activate workflow\n5. Test: POST the Webhook URL or wait for the hourly schedule\n\nAPIs: CoinGecko markets + coin detail\nThreshold: leader 24h change > 2% → bullish route\nErrors: HTTP nodes use Continue on Fail (error output) → Discord alert",
+        "height": 320,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, 20]
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          { "node": "CoinGecko Markets", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Webhook (manual test)": {
+      "main": [
+        [
+          { "node": "CoinGecko Markets", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "CoinGecko Markets": {
+      "main": [
+        [
+          { "node": "Transform Top 5", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Format API Failure", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Transform Top 5": {
+      "main": [
+        [
+          { "node": "Enrich Leader Details", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Enrich Leader Details": {
+      "main": [
+        [
+          { "node": "Merge Enrichment", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Format API Failure", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Merge Enrichment": {
+      "main": [
+        [
+          { "node": "IF Leader 24h Change > 2%", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "IF Leader 24h Change > 2%": {
+      "main": [
+        [
+          { "node": "Format Bullish Digest", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Format Soft Digest", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Format Bullish Digest": {
+      "main": [
+        [
+          { "node": "Post Digest to Discord", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Format Soft Digest": {
+      "main": [
+        [
+          { "node": "Post Digest to Discord", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Format API Failure": {
+      "main": [
+        [
+          { "node": "Post API Failure Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "assessment" },
+    { "name": "task2" }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

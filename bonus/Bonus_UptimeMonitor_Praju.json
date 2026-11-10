@@ -1,0 +1,189 @@
+{
+  "name": "Bonus Uptime Monitor - Conduit Demo",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-5m",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://demo.realworld.show/",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000
+      },
+      "id": "http-ping",
+      "name": "Ping Conduit Demo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 300],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = items[0].json;\nconst status = item.statusCode ?? item.status ?? 0;\nconst ok = Number(status) === 200;\nreturn [{\n  json: {\n    checkedAt: new Date().toISOString(),\n    url: 'https://demo.realworld.show/',\n    statusCode: Number(status),\n    ok,\n    note: ok ? 'healthy' : 'ALERT: non-200 response'\n  }\n}];"
+      },
+      "id": "code-eval",
+      "name": "Evaluate Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "not-200",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-down",
+      "name": "IF Not Healthy",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = items[0].json;\nconst content = [\n  'UPTIME ALERT — Conduit Demo',\n  `URL: ${d.url}`,\n  `Status: ${d.statusCode}`,\n  `Checked: ${d.checkedAt}`,\n  'Action: investigate hosting / CDN / app process.'\n].join('\\n');\nreturn [{ json: { content, ...d } }];"
+      },
+      "id": "format-alert",
+      "name": "Format Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $json.content }}",
+        "options": {}
+      },
+      "id": "discord-alert",
+      "name": "Discord Alert",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [1220, 200],
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "REPLACE_WITH_DISCORD_CREDENTIAL_ID",
+          "name": "Discord Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...items[0].json, logged: true } }];"
+      },
+      "id": "healthy-log",
+      "name": "Log Healthy Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 420]
+    },
+    {
+      "parameters": {
+        "content": "## Bonus Uptime Monitor\nPings https://demo.realworld.show/ every 5 minutes.\nAlerts Discord when status is not 200.\nRetry: 3 attempts / 5s wait on the ping node.\nUses same Discord credential as Task 2.",
+        "height": 220,
+        "width": 320
+      },
+      "id": "sticky-bonus",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, 40]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          { "node": "Ping Conduit Demo", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Ping Conduit Demo": {
+      "main": [
+        [
+          { "node": "Evaluate Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Evaluate Status": {
+      "main": [
+        [
+          { "node": "IF Not Healthy", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "IF Not Healthy": {
+      "main": [
+        [
+          { "node": "Format Alert", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Log Healthy Check", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Format Alert": {
+      "main": [
+        [
+          { "node": "Discord Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "assessment" },
+    { "name": "bonus" }
+  ]
+}
